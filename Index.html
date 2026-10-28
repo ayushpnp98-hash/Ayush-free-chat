@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ayush Free Chat</title>
+  <style>
+    body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      background: #eef3f8;
+      color: #172033;
+    }
+    .container {
+      max-width: 500px;
+      margin: 20px auto;
+      padding: 16px;
+    }
+    .card {
+      background: white;
+      padding: 18px;
+      border-radius: 16px;
+      box-shadow: 0 3px 12px #0001;
+      margin-bottom: 15px;
+    }
+    h2 { color: #1769e0; margin-top: 0; }
+    input, button {
+      box-sizing: border-box;
+      width: 100%;
+      padding: 12px;
+      margin: 6px 0;
+      border-radius: 9px;
+      font-size: 16px;
+    }
+    input { border: 1px solid #ccd4df; }
+    button {
+      border: 0;
+      background: #1769e0;
+      color: white;
+      font-weight: bold;
+    }
+    button:disabled { opacity: .5; }
+    .secondary { background: #536477; }
+    #messages {
+      height: 300px;
+      overflow-y: auto;
+      background: #f6f8fb;
+      padding: 10px;
+      border-radius: 10px;
+    }
+    .message {
+      background: #e2edff;
+      padding: 10px;
+      margin: 8px 0;
+      border-radius: 10px;
+      overflow-wrap: anywhere;
+    }
+    .small { color: #687386; font-size: 13px; }
+    #status { overflow-wrap: anywhere; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="card">
+      <h2>💬 Ayush Free Chat</h2>
+      <p class="small">Sign up or log in to join the chat.</p>
+
+      <div id="authBox">
+        <input id="email" type="email"
+          placeholder="Your email" autocomplete="email">
+        <input id="password" type="password"
+          placeholder="Password (at least 6 characters)"
+          autocomplete="current-password">
+        <button id="signupBtn">Create account</button>
+        <button id="loginBtn" class="secondary">Login</button>
+      </div>
+
+      <div id="userBox" hidden>
+        <p id="userInfo"></p>
+        <button id="logoutBtn" class="secondary">Logout</button>
+      </div>
+
+      <p id="status" class="small">Connecting...</p>
+    </div>
+
+    <div class="card">
+      <h3>Messages</h3>
+      <p id="count">Today's messages: 0 / 10</p>
+      <div id="messages"></div>
+
+      <input id="messageInput"
+        placeholder="Write a message..."
+        maxlength="500" disabled>
+
+      <button id="sendBtn" disabled>Send message</button>
+      <p class="small">
+        Shared chat: all signed-in users can see these messages.
+      </p>
+    </div>
+  </div>
+
+  <script type="module">
+    import { initializeApp }
+      from "https://www.gstatic.com/firebasejs/13.1.0/firebase-app.js";
+
+    import {
+      getAuth, createUserWithEmailAndPassword,
+      signInWithEmailAndPassword, onAuthStateChanged,
+      signOut
+    } from "https://www.gstatic.com/firebasejs/13.1.0/firebase-auth.js";
+
+    import {
+      getFirestore, collection, addDoc, query,
+      orderBy, limit, onSnapshot, serverTimestamp
+    } from "https://www.gstatic.com/firebasejs/13.1.0/firebase-firestore.js";
+
+    // Use the configuration from your Firebase Console.
+    const firebaseConfig = {
+      apiKey: "AIzaSyB6AIB1i56MtFEWMo1-sYR1mkx2aHut81k"
+      authDomain: "free-chat-ayush.firebaseapp.com",
+      projectId: "free-chat-ayush",
+      storageBucket: "free-chat-ayush.firebasestorage.app",
+      messagingSenderId: "825826411021",
+      appId: "1:825826411021:web:89faa9496f9be588130b44"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+    const db = getFirestore(app);
+
+    const $ = id => document.getElementById(id);
+    let currentUser = null;
+    let stopListening = null;
+    let sending = false;
+
+    function showStatus(message) {
+      $("status").textContent = message;
+    }
+
+    function todayKey() {
+      const d = new Date();
+      return "ayushChat_" + d.getFullYear() + "-" +
+        (d.getMonth() + 1) + "-" + d.getDate();
+    }
+
+    function getCount() {
+      return Number(localStorage.getItem(todayKey()) || 0);
+    }
+
+    function updateCount() {
+      $("count").textContent =
+        "Today's messages: " + getCount() + " / 10";
+    }
+
+    $("signupBtn").addEventListener("click", async () => {
+      try {
+        await createUserWithEmailAndPassword(
+          auth, $("email").value.trim(), $("password").value
+        );
+        showStatus("Account created!");
+      } catch (e) {
+        showStatus(e.message);
+      }
+    });
+
+    $("loginBtn").addEventListener("click", async () => {
+      try {
+        await signInWithEmailAndPassword(
+          auth, $("email").value.trim(), $("password").value
+        );
+        showStatus("Login successful!");
+      } catch (e) {
+        showStatus(e.message);
+      }
+    });
+
+    $("logoutBtn").addEventListener("click", async () => {
+      try {
+        await signOut(auth);
+      } catch (e) {
+        showStatus(e.message);
+      }
+    });
+
+    onAuthStateChanged(auth, user => {
+      currentUser = user;
+      $("authBox").hidden = !!user;
+      $("userBox").hidden = !user;
+      $("userInfo").textContent = user ? "Logged in: " + user.email : "";
+      $("messageInput").disabled = !user;
+      $("sendBtn").disabled = !user;
+
+      if (stopListening) {
+        stopListening();
+        stopListening = null;
+      }
+
+      $("messages").replaceChildren();
+      updateCount();
+
+      if (!user) {
+        showStatus("Please log in to use chat.");
+        return;
+      }
+
+      showStatus("Connected as " + user.email);
+
+      const q = query(
+        collection(db, "messages"),
+        orderBy("createdAt", "desc"),
+        limit(50)
+      );
+
+      stopListening = onSnapshot(q, snapshot => {
+        const box = $("messages");
+        box.replaceChildren();
+
+        snapshot.docs.reverse().forEach(docSnap => {
+          const data = docSnap.data();
+          const item = document.createElement("div");
+          item.className = "message";
+
+          const sender = document.createElement("strong");
+          sender.textContent = data.senderEmail || "User";
+
+          const body = document.createElement("div");
+          body.textContent = data.text || "";
+
+          item.append(sender, body);
+          box.appendChild(item);
+        });
+
+        box.scrollTop = box.scrollHeight;
+      }, error => {
+        showStatus("Chat error: " + error.message);
+      });
+    });
+
+    $("sendBtn").addEventListener("click", async () => {
+      if (!currentUser || sending) return;
+
+      const text = $("messageInput").value.trim();
+      if (!text) {
+        showStatus("Please type a message first.");
+        return;
+      }
+
+      if (getCount() >= 10) {
+        showStatus("Daily message limit reached.");
+        return;
+      }
+
+      sending = true;
+      $("sendBtn").disabled = true;
+
+      try {
+        await addDoc(collection(db, "messages"), {
+          text: text,
+          senderUid: currentUser.uid,
+          senderEmail: currentUser.email,
+          createdAt: serverTimestamp()
+        });
+
+        localStorage.setItem(todayKey(), String(getCount() + 1));
+        $("messageInput").value = "";
+        updateCount();
+        showStatus("Message sent!");
+      } catch (e) {
+        showStatus("Could not send: " + e.message);
+      } finally {
+        sending = false;
+        $("sendBtn").disabled = !currentUser;
+      }
+    });
+
+    updateCount();
+  </script>
+</body>
+</html>
